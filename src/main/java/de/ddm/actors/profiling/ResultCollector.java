@@ -7,7 +7,7 @@ import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
 import de.ddm.actors.Guardian;
-import de.ddm.serialization.AkkaSerializable;
+import de.ddm.actors.message.Message;
 import de.ddm.singletons.DomainConfigurationSingleton;
 import de.ddm.structures.InclusionDependency;
 import lombok.AllArgsConstructor;
@@ -20,21 +20,20 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.List;
 
-public class ResultCollector extends AbstractBehavior<ResultCollector.Message> {
+public class ResultCollector extends AbstractBehavior<Message> {
 
 	////////////////////
 	// Actor Messages //
 	////////////////////
 
-	public interface Message extends AkkaSerializable {
-	}
+	
 
 	@Getter
 	@NoArgsConstructor
 	@AllArgsConstructor
 	public static class ResultMessage implements Message {
 		private static final long serialVersionUID = -7070569202900845736L;
-		List<InclusionDependency> inclusionDependencies;
+		private List<InclusionDependency> inclusionDependencies;
 	}
 
 	@NoArgsConstructor
@@ -55,20 +54,22 @@ public class ResultCollector extends AbstractBehavior<ResultCollector.Message> {
 	private ResultCollector(ActorContext<Message> context) throws IOException {
 		super(context);
 
-		File file = new File(DomainConfigurationSingleton.get().getResultCollectorOutputFileName());
-		if (file.exists() && !file.delete())
-			throw new IOException("Could not delete existing result file: " + file.getName());
-		if (!file.createNewFile())
-			throw new IOException("Could not create result file: " + file.getName());
+		String outputFileName = DomainConfigurationSingleton.get().getResultCollectorOutputFileName();
 
-		this.writer = new BufferedWriter(new FileWriter(file));
+		File txt_file = new File(outputFileName + ".txt");
+		if (txt_file.exists() && !txt_file.delete())
+			throw new IOException("Could not delete existing result file: " + txt_file.getName());
+		if (!txt_file.createNewFile())
+			throw new IOException("Could not create result file: " + txt_file.getName());
+
+		this.txt_writer = new BufferedWriter(new FileWriter(txt_file));
 	}
 
 	/////////////////
 	// Actor State //
 	/////////////////
 
-	private final BufferedWriter writer;
+	private final BufferedWriter txt_writer;
 
 	////////////////////
 	// Actor Behavior //
@@ -87,9 +88,10 @@ public class ResultCollector extends AbstractBehavior<ResultCollector.Message> {
 		this.getContext().getLog().info("Received {} INDs!", message.getInclusionDependencies().size());
 
 		for (InclusionDependency ind : message.getInclusionDependencies()) {
-			this.writer.write(ind.toString());
-			this.writer.newLine();
+			this.txt_writer.write(ind.toString());
+			this.txt_writer.newLine();
 		}
+		this.txt_writer.flush();
 
 		return this;
 	}
@@ -97,13 +99,16 @@ public class ResultCollector extends AbstractBehavior<ResultCollector.Message> {
 	private Behavior<Message> handle(FinalizeMessage message) throws IOException {
 		this.getContext().getLog().info("Received FinalizeMessage!");
 
-		this.writer.flush();
+		this.txt_writer.flush();
+
 		this.getContext().getSystem().unsafeUpcast().tell(new Guardian.ShutdownMessage());
+
 		return this;
 	}
 
 	private Behavior<Message> handle(PostStop signal) throws IOException {
-		this.writer.close();
+		this.txt_writer.close();
+
 		return this;
 	}
 }

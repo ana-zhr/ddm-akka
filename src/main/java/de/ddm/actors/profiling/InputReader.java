@@ -9,7 +9,8 @@ import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
 import com.opencsv.CSVReader;
 import com.opencsv.exceptions.CsvValidationException;
-import de.ddm.serialization.AkkaSerializable;
+import de.ddm.actors.message.largeMessage.LargeMessage;
+import de.ddm.actors.message.Message;
 import de.ddm.singletons.DomainConfigurationSingleton;
 import de.ddm.singletons.InputConfigurationSingleton;
 import lombok.AllArgsConstructor;
@@ -21,21 +22,20 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-public class InputReader extends AbstractBehavior<InputReader.Message> {
+public class InputReader extends AbstractBehavior<Message> {
 
 	////////////////////
 	// Actor Messages //
 	////////////////////
 
-	public interface Message extends AkkaSerializable {
-	}
+
 
 	@Getter
 	@NoArgsConstructor
 	@AllArgsConstructor
 	public static class ReadHeaderMessage implements Message {
 		private static final long serialVersionUID = 1729062814525657711L;
-		ActorRef<DependencyMiner.Message> replyTo;
+		private ActorRef<LargeMessage> replyTo;
 	}
 
 	@Getter
@@ -43,7 +43,7 @@ public class InputReader extends AbstractBehavior<InputReader.Message> {
 	@AllArgsConstructor
 	public static class ReadBatchMessage implements Message {
 		private static final long serialVersionUID = -7915854043207237318L;
-		ActorRef<DependencyMiner.Message> replyTo;
+		private ActorRef<LargeMessage> replyTo;
 	}
 
 	////////////////////////
@@ -60,10 +60,8 @@ public class InputReader extends AbstractBehavior<InputReader.Message> {
 		super(context);
 		this.id = id;
 		this.reader = InputConfigurationSingleton.get().createCSVReader(inputFile);
-		this.header = InputConfigurationSingleton.get().getHeader(inputFile);
-		
-		if (InputConfigurationSingleton.get().isFileHasHeader())
-			this.reader.readNext();
+		this.header = reader.readNext(); // read header
+		assert this.header != null : "Failed to read header of input file " + inputFile.getName();
 	}
 
 	/////////////////
@@ -89,7 +87,7 @@ public class InputReader extends AbstractBehavior<InputReader.Message> {
 	}
 
 	private Behavior<Message> handle(ReadHeaderMessage message) {
-		message.getReplyTo().tell(new DependencyMiner.HeaderMessage(this.id, this.header));
+		message.getReplyTo().tell(new DependencyMiner.HeaderLargeMessage(this.id, this.header));
 		return this;
 	}
 
@@ -102,7 +100,7 @@ public class InputReader extends AbstractBehavior<InputReader.Message> {
 			batch.add(line);
 		}
 
-		message.getReplyTo().tell(new DependencyMiner.BatchMessage(this.id, batch));
+		message.getReplyTo().tell(new DependencyMiner.BatchLargeMessage(this.id, batch));
 		return this;
 	}
 

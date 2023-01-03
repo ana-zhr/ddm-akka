@@ -2,6 +2,7 @@ package de.ddm;
 
 import akka.actor.typed.ActorSystem;
 import de.ddm.actors.Guardian;
+import de.ddm.actors.message.Message;
 import de.ddm.configuration.Command;
 import de.ddm.configuration.SystemConfiguration;
 import de.ddm.singletons.SystemConfigurationSingleton;
@@ -15,17 +16,13 @@ public class Main {
 
 		SystemConfiguration config = SystemConfigurationSingleton.get();
 
-		final ActorSystem<Guardian.Message> guardian = ActorSystem.create(Guardian.create(), config.getActorSystemName(), config.toAkkaConfig());
+		final ActorSystem<Message> guardian = (ActorSystem<Message>) ActorSystem.create(Guardian.create(), config.getActorSystemName(), config.toAkkaConfig());
 
 		if (config.getRole().equals(SystemConfiguration.MASTER_ROLE)) {
 			if (config.isStartPaused())
 				waitForInput(">>> Press ENTER to start <<<");
 
 			guardian.tell(new Guardian.StartMessage());
-
-		//	waitForInput(">>> Press ENTER to exit <<<");
-
-		//	guardian.tell(new Guardian.ShutdownMessage());
 		}
 	}
 

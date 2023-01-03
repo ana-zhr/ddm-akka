@@ -7,23 +7,22 @@ import akka.actor.typed.javadsl.AbstractBehavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
+import de.ddm.actors.message.Message;
 import de.ddm.actors.patterns.Reaper;
 import de.ddm.actors.profiling.DependencyWorker;
-import de.ddm.serialization.AkkaSerializable;
 import de.ddm.singletons.SystemConfigurationSingleton;
 import lombok.NoArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class Worker extends AbstractBehavior<Worker.Message> {
+public class Worker extends AbstractBehavior<Message> {
 
 	////////////////////
 	// Actor Messages //
 	////////////////////
 
-	public interface Message extends AkkaSerializable {
-	}
+	
 
 	@NoArgsConstructor
 	public static class ShutdownMessage implements Message {
@@ -55,7 +54,7 @@ public class Worker extends AbstractBehavior<Worker.Message> {
 	// Actor State //
 	/////////////////
 
-	final List<ActorRef<DependencyWorker.Message>> workers;
+	private final List<ActorRef<DependencyWorker.DependencyWorkerMessage>> workers;
 
 	////////////////////
 	// Actor Behavior //
@@ -69,10 +68,6 @@ public class Worker extends AbstractBehavior<Worker.Message> {
 	}
 
 	private Behavior<Message> handle(ShutdownMessage message) {
-		// If we expect the system to still be active when the a ShutdownMessage is issued,
-		// we should propagate this ShutdownMessage to all active child actors so that they
-		// can end their protocols in a clean way. Simply stopping this actor also stops all
-		// child actors, but in a hard way!
 		return Behaviors.stopped();
 	}
 }

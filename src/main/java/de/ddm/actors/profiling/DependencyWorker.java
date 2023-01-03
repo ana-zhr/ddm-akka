@@ -7,28 +7,32 @@ import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
 import akka.actor.typed.receptionist.Receptionist;
+import de.ddm.actors.message.largeMessage.LargeMessage;
+import de.ddm.actors.message.Message;
+import de.ddm.actors.message.largeMessage.SendMessage;
 import de.ddm.actors.patterns.LargeMessageProxy;
 import de.ddm.serialization.AkkaSerializable;
+import de.ddm.structures.InclusionDependency;
+import de.ddm.structures.Task;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 
-public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message> {
+public class DependencyWorker extends AbstractBehavior<DependencyWorker.DependencyWorkerMessage> {
 
 	////////////////////
 	// Actor Messages //
 	////////////////////
 
-	public interface Message extends AkkaSerializable {
+	public interface DependencyWorkerMessage extends AkkaSerializable, LargeMessage {
 	}
 
 	@Getter
 	@NoArgsConstructor
 	@AllArgsConstructor
-	public static class ReceptionistListingMessage implements Message {
+	public static class ReceptionistListingDependencyWorkerMessage implements DependencyWorkerMessage {
 		private static final long serialVersionUID = -5246338806092216222L;
 		Receptionist.Listing listing;
 	}
@@ -36,10 +40,21 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	@Getter
 	@NoArgsConstructor
 	@AllArgsConstructor
-	public static class TaskMessage implements Message {
+	public static class TaskDependencyWorkerMessage implements DependencyWorkerMessage {
 		private static final long serialVersionUID = -4667745204456518160L;
-		ActorRef<LargeMessageProxy.Message> dependencyMinerLargeMessageProxy;
-		int task;
+		ActorRef<Message> dependencyMinerLargeMessageProxy;
+
+		private Task task;
+		private Map<String, Set<String>> distinctValuesA;
+		private Map<String, Set<String>> distinctValuesB;
+
+		private int getSetMemorySize(Set<String> set) {
+			return set.stream().mapToInt(value -> value.length() * 2).sum();
+		}
+
+		public int getMemorySize() {
+			return distinctValuesA.values().stream().mapToInt(this::getSetMemorySize).sum() + distinctValuesB.values().stream().mapToInt(this::getSetMemorySize).sum();
+		}
 	}
 
 	////////////////////////
@@ -48,14 +63,14 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 
 	public static final String DEFAULT_NAME = "dependencyWorker";
 
-	public static Behavior<Message> create() {
+	public static Behavior<DependencyWorkerMessage> create() {
 		return Behaviors.setup(DependencyWorker::new);
 	}
 
-	private DependencyWorker(ActorContext<Message> context) {
+	private DependencyWorker(ActorContext<DependencyWorkerMessage> context) {
 		super(context);
 
-		final ActorRef<Receptionist.Listing> listingResponseAdapter = context.messageAdapter(Receptionist.Listing.class, ReceptionistListingMessage::new);
+		final ActorRef<Receptionist.Listing> listingResponseAdapter = context.messageAdapter(Receptionist.Listing.class, ReceptionistListingDependencyWorkerMessage::new);
 		context.getSystem().receptionist().tell(Receptionist.subscribe(DependencyMiner.dependencyMinerService, listingResponseAdapter));
 
 		this.largeMessageProxy = this.getContext().spawn(LargeMessageProxy.create(this.getContext().getSelf().unsafeUpcast()), LargeMessageProxy.DEFAULT_NAME);
@@ -65,40 +80,66 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	// Actor State //
 	/////////////////
 
-	private final ActorRef<LargeMessageProxy.Message> largeMessageProxy;
+	private final ActorRef<Message> largeMessageProxy;
 
 	////////////////////
 	// Actor Behavior //
 	////////////////////
 
 	@Override
-	public Receive<Message> createReceive() {
+	public Receive<DependencyWorkerMessage> createReceive() {
 		return newReceiveBuilder()
-				.onMessage(ReceptionistListingMessage.class, this::handle)
-				.onMessage(TaskMessage.class, this::handle)
+				.onMessage(ReceptionistListingDependencyWorkerMessage.class, this::handle)
+				.onMessage(TaskDependencyWorkerMessage.class, this::handle)
 				.build();
 	}
 
-	private Behavior<Message> handle(ReceptionistListingMessage message) {
-		Set<ActorRef<DependencyMiner.Message>> dependencyMiners = message.getListing().getServiceInstances(DependencyMiner.dependencyMinerService);
-		for (ActorRef<DependencyMiner.Message> dependencyMiner : dependencyMiners)
-			dependencyMiner.tell(new DependencyMiner.RegistrationMessage(this.getContext().getSelf()));
+	private Behavior<DependencyWorkerMessage> handle(ReceptionistListingDependencyWorkerMessage message) {
+		Set<ActorRef<LargeMessage>> dependencyMiners = message.getListing().getServiceInstances(DependencyMiner.dependencyMinerService);
+		for (ActorRef<LargeMessage> dependencyMiner : dependencyMiners)
+			dependencyMiner.tell(new DependencyMiner.RegistrationLargeMessage(this.getContext().getSelf(), this.largeMessageProxy));
 		return this;
 	}
 
-	private Behavior<Message> handle(TaskMessage message) {
-		this.getContext().getLog().info("Working!");
-		// I should probably know how to solve this task, but for now I just pretend some work...
 
-		int result = message.getTask();
-		long time = System.currentTimeMillis();
-		Random rand = new Random();
-		int runtime = (rand.nextInt(2) + 2) * 1000;
-		while (System.currentTimeMillis() - time < runtime)
-			result = ((int) Math.abs(Math.sqrt(result)) * result) % 1334525;
+	private Behavior<DependencyWorkerMessage> handle(TaskDependencyWorkerMessage message) {
+		this.getContext().getLog().info(
+			message.task.getTableNameA(), message.task.getColumnNamesA().size(), message.distinctValuesA.values().stream().mapToInt(set -> set.size()).sum(),
+			message.task.getTableNameB(), message.task.getColumnNamesB().size(), message.distinctValuesB.values().stream().mapToInt(set -> set.size()).sum(),
+			message.getMemorySize());
 
-		LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(), result);
-		this.largeMessageProxy.tell(new LargeMessageProxy.SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
+		List<InclusionDependency> inclusionDeps = new ArrayList<>();
+		message.distinctValuesA.forEach((columnA, setA) -> {
+			message.distinctValuesB.forEach((columnB, setB) -> {
+			        if (columnA == columnB) {
+			            return;
+				}
+				for (InclusionDependency dep : inclusionDeps) {
+				    if (dep.getDependentColumn() == columnA
+				    && dep.getReferencedColumn() == columnB){
+				       return;
+				    }
+				}
+				
+				int cardinalityA = setA.size();
+				int cardinalityB = setB.size();
+
+
+				if (cardinalityA <= cardinalityB && setB.containsAll(setA)) {
+					inclusionDeps.add(new InclusionDependency(message.task.getTableNameA(), message.task.getTableNameB(), columnA, columnB));
+				}
+				if (cardinalityB <= cardinalityA && setA.containsAll(setB)) {
+					inclusionDeps.add(new InclusionDependency(message.task.getTableNameB(), message.task.getTableNameA(), columnB, columnA));
+				}
+			});
+		});
+
+		this.getContext().getLog().info(
+			"Found {} INDs for table {} and table {}: {}",
+			inclusionDeps.size(), message.task.getTableNameA(), message.task.getTableNameB(), inclusionDeps);
+
+		LargeMessage completionMessage = new DependencyMiner.CompletionLargeMessage(this.getContext().getSelf(), inclusionDeps);
+		this.largeMessageProxy.tell(new SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
 
 		return this;
 	}

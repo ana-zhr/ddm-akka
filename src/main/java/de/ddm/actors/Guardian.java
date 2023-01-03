@@ -5,9 +5,9 @@ import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.*;
 import akka.actor.typed.receptionist.Receptionist;
 import akka.actor.typed.receptionist.ServiceKey;
+import de.ddm.actors.message.Message;
 import de.ddm.actors.patterns.Reaper;
 import de.ddm.configuration.SystemConfiguration;
-import de.ddm.serialization.AkkaSerializable;
 import de.ddm.singletons.SystemConfigurationSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -17,14 +17,13 @@ import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
 
-public class Guardian extends AbstractBehavior<Guardian.Message> {
+public class Guardian extends AbstractBehavior<Message> {
 
 	////////////////////
 	// Actor Messages //
 	////////////////////
 
-	public interface Message extends AkkaSerializable {
-	}
+	
 
 	@NoArgsConstructor
 	public static class StartMessage implements Message {
@@ -44,7 +43,7 @@ public class Guardian extends AbstractBehavior<Guardian.Message> {
 	@AllArgsConstructor
 	public static class ReceptionistListingMessage implements Message {
 		private static final long serialVersionUID = 2336368568740749020L;
-		Receptionist.Listing listing;
+		private Receptionist.Listing listing;
 	}
 
 	////////////////////////
@@ -53,7 +52,7 @@ public class Guardian extends AbstractBehavior<Guardian.Message> {
 
 	public static final String DEFAULT_NAME = "userGuardian";
 
-	public static final ServiceKey<Guardian.Message> guardianService = ServiceKey.create(Guardian.Message.class, DEFAULT_NAME + "Service");
+	public static final ServiceKey<Message> guardianService = ServiceKey.create(Message.class, DEFAULT_NAME + "Service");
 
 	public static Behavior<Message> create() {
 		return Behaviors.setup(
@@ -87,9 +86,9 @@ public class Guardian extends AbstractBehavior<Guardian.Message> {
 
 	private Set<ActorRef<Message>> userGuardians = new HashSet<>();
 
-	private final ActorRef<Reaper.Message> reaper;
-	private ActorRef<Master.Message> master;
-	private ActorRef<Worker.Message> worker;
+	private final ActorRef<Message> reaper;
+	private ActorRef<Message> master;
+	private ActorRef<Message> worker;
 
 	////////////////////
 	// Actor Behavior //

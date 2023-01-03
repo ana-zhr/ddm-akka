@@ -9,6 +9,8 @@ import akka.actor.typed.javadsl.Receive;
 import akka.serialization.Serialization;
 import akka.serialization.SerializationExtension;
 import akka.serialization.Serializers;
+import de.ddm.actors.message.Message;
+import de.ddm.actors.message.largeMessage.*;
 import de.ddm.serialization.AkkaSerializable;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -19,67 +21,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-public class LargeMessageProxy extends AbstractBehavior<LargeMessageProxy.Message> {
-
-	////////////////////
-	// Actor Messages //
-	////////////////////
-
-	public interface LargeMessage extends AkkaSerializable {
-	}
-
-	public interface Message extends AkkaSerializable {
-	}
-
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class SendMessage implements Message {
-		private static final long serialVersionUID = -1203695340601241430L;
-		private LargeMessage message;
-		private ActorRef<Message> receiverProxy;
-	}
-
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ConnectMessage implements Message {
-		private static final long serialVersionUID = -2368932735326858722L;
-		private int senderTransmissionKey;
-		private ActorRef<Message> senderProxy;
-		private int largeMessageSize;
-		private int serializerId;
-		private String manifest;
-	}
-
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ConnectAckMessage implements Message {
-		private static final long serialVersionUID = 6497424731575554980L;
-		private int senderTransmissionKey;
-		private int receiverTransmissionKey;
-	}
-
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class BytesMessage implements Message {
-		private static final long serialVersionUID = -8435193720156121630L;
-		private byte[] bytes;
-		private int senderTransmissionKey;
-		private int receiverTransmissionKey;
-	}
-
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class BytesAckMessage implements Message {
-		private static final long serialVersionUID = 5992096322167014051L;
-		private int senderTransmissionKey;
-		private int receiverTransmissionKey;
-	}
-
+public class LargeMessageProxy extends AbstractBehavior<Message> {
 	////////////////////////
 	// Actor Construction //
 	////////////////////////
@@ -173,7 +115,6 @@ public class LargeMessageProxy extends AbstractBehavior<LargeMessageProxy.Messag
 	private Behavior<Message> handle(BytesAckMessage message) {
 		return this.sendNext(message.getSenderTransmissionKey(), message.getReceiverTransmissionKey());
 	}
-
 	private Behavior<Message> sendNext(int senderTransmissionKey, int receiverTransmissionKey) {
 		ActorRef<Message> receiverProxy = this.pendingSends.get(senderTransmissionKey).getReceiverProxy();
 

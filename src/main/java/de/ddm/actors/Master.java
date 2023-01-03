@@ -7,19 +7,20 @@ import akka.actor.typed.javadsl.AbstractBehavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
+import de.ddm.actors.message.largeMessage.LargeMessage;
+import de.ddm.actors.message.Message;
+import de.ddm.actors.message.largeMessage.StartLargeMessage;
 import de.ddm.actors.patterns.Reaper;
 import de.ddm.actors.profiling.DependencyMiner;
-import de.ddm.serialization.AkkaSerializable;
 import lombok.NoArgsConstructor;
 
-public class Master extends AbstractBehavior<Master.Message> {
+public class Master extends AbstractBehavior<Message> {
 
 	////////////////////
 	// Actor Messages //
 	////////////////////
 
-	public interface Message extends AkkaSerializable {
-	}
+	
 
 	@NoArgsConstructor
 	public static class StartMessage implements Message {
@@ -52,7 +53,7 @@ public class Master extends AbstractBehavior<Master.Message> {
 	// Actor State //
 	/////////////////
 
-	private final ActorRef<DependencyMiner.Message> dependencyMiner;
+	private final ActorRef<LargeMessage> dependencyMiner;
 
 	////////////////////
 	// Actor Behavior //
@@ -67,15 +68,11 @@ public class Master extends AbstractBehavior<Master.Message> {
 	}
 
 	private Behavior<Message> handle(StartMessage message) {
-		this.dependencyMiner.tell(new DependencyMiner.StartMessage());
+		this.dependencyMiner.tell(new StartLargeMessage());
 		return this;
 	}
 
 	private Behavior<Message> handle(ShutdownMessage message) {
-		// If we expect the system to still be active when the a ShutdownMessage is issued,
-		// we should propagate this ShutdownMessage to all active child actors so that they
-		// can end their protocols in a clean way. Simply stopping this actor also stops all
-		// child actors, but in a hard way!
 		return Behaviors.stopped();
 	}
 }

@@ -7,7 +7,7 @@ import akka.actor.typed.javadsl.AbstractBehavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
-import de.ddm.serialization.AkkaSerializable;
+import de.ddm.actors.message.Message;
 import de.ddm.singletons.ReaperSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -16,7 +16,7 @@ import lombok.NoArgsConstructor;
 import java.util.HashSet;
 import java.util.Set;
 
-public class Reaper extends AbstractBehavior<Reaper.Message> {
+public class Reaper extends AbstractBehavior<Message> {
 
 	public static <T> void watchWithDefaultReaper(ActorRef<T> actor) {
 		ReaperSingleton.get().tell(new WatchMeMessage(actor.unsafeUpcast()));
@@ -25,9 +25,6 @@ public class Reaper extends AbstractBehavior<Reaper.Message> {
 	////////////////////
 	// Actor Messages //
 	////////////////////
-
-	public interface Message extends AkkaSerializable {
-	}
 
 	@Getter
 	@NoArgsConstructor
