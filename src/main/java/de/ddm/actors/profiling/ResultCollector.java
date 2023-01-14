@@ -7,7 +7,7 @@ import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
 import de.ddm.actors.Guardian;
-import de.ddm.actors.message.Message;
+import de.ddm.serialization.AkkaSerializable;
 import de.ddm.singletons.DomainConfigurationSingleton;
 import de.ddm.structures.InclusionDependency;
 import lombok.AllArgsConstructor;
@@ -20,95 +20,89 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.List;
 
-public class ResultCollector extends AbstractBehavior<Message> {
+public class ResultCollector extends AbstractBehavior<ResultCollector.Message> {
 
-	////////////////////
-	// Actor Messages //
-	////////////////////
+    ////////////////////
+    // Actor Messages //
+    ////////////////////
 
-	
+    public static final String DEFAULT_NAME = "resultCollector";
+    private final BufferedWriter writer;
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ResultMessage implements Message {
-		private static final long serialVersionUID = -7070569202900845736L;
-		private List<InclusionDependency> inclusionDependencies;
-	}
+    private ResultCollector(ActorContext<Message> context) throws IOException {
+        super(context);
 
-	@NoArgsConstructor
-	public static class FinalizeMessage implements Message {
-		private static final long serialVersionUID = -6603856949941810321L;
-	}
+        File file = new File(DomainConfigurationSingleton.get().getResultCollectorOutputFileName());
+        if (file.exists() && !file.delete())
+            throw new IOException("Could not delete existing result file: " + file.getName());
+        if (!file.createNewFile())
+            throw new IOException("Could not create result file: " + file.getName());
 
-	////////////////////////
-	// Actor Construction //
-	////////////////////////
+        this.writer = new BufferedWriter(new FileWriter(file));
+    }
 
-	public static final String DEFAULT_NAME = "resultCollector";
+    ////////////////////////
+    // Actor Construction //
+    ////////////////////////
 
-	public static Behavior<Message> create() {
-		return Behaviors.setup(ResultCollector::new);
-	}
+    public static Behavior<Message> create() {
+        return Behaviors.setup(ResultCollector::new);
+    }
 
-	private ResultCollector(ActorContext<Message> context) throws IOException {
-		super(context);
+    @Override
+    public Receive<Message> createReceive() {
+        return newReceiveBuilder()
+                .onMessage(ResultMessage.class, this::handle)
+                .onMessage(FinalizeMessage.class, this::handle)
+                .onSignal(PostStop.class, this::handle)
+                .build();
+    }
 
-		String outputFileName = DomainConfigurationSingleton.get().getResultCollectorOutputFileName();
+    private Behavior<Message> handle(ResultMessage message) throws IOException {
+        this.getContext().getLog().info("Received {} INDs!", message.getInclusionDependencies().size());
 
-		File txt_file = new File(outputFileName + ".txt");
-		if (txt_file.exists() && !txt_file.delete())
-			throw new IOException("Could not delete existing result file: " + txt_file.getName());
-		if (!txt_file.createNewFile())
-			throw new IOException("Could not create result file: " + txt_file.getName());
+        for (InclusionDependency ind : message.getInclusionDependencies()) {
+            this.writer.write(ind.toString());
+            this.writer.newLine();
+        }
 
-		this.txt_writer = new BufferedWriter(new FileWriter(txt_file));
-	}
+        return this;
+    }
 
-	/////////////////
-	// Actor State //
-	/////////////////
+    /////////////////
+    // Actor State //
+    /////////////////
 
-	private final BufferedWriter txt_writer;
+    private Behavior<Message> handle(FinalizeMessage message) throws IOException {
+        this.getContext().getLog().info("Received FinalizeMessage!");
 
-	////////////////////
-	// Actor Behavior //
-	////////////////////
+        this.writer.flush();
+        this.getContext().getSystem().unsafeUpcast().tell(new Guardian.ShutdownMessage());
+        return this;
+    }
 
-	@Override
-	public Receive<Message> createReceive() {
-		return newReceiveBuilder()
-				.onMessage(ResultMessage.class, this::handle)
-				.onMessage(FinalizeMessage.class, this::handle)
-				.onSignal(PostStop.class, this::handle)
-				.build();
-	}
+    ////////////////////
+    // Actor Behavior //
+    ////////////////////
 
-	private Behavior<Message> handle(ResultMessage message) throws IOException {
-		this.getContext().getLog().info("Received {} INDs!", message.getInclusionDependencies().size());
+    private Behavior<Message> handle(PostStop signal) throws IOException {
+        this.writer.close();
+        return this;
+    }
 
-		for (InclusionDependency ind : message.getInclusionDependencies()) {
-			this.txt_writer.write(ind.toString());
-			this.txt_writer.newLine();
-		}
-		this.txt_writer.flush();
+    public interface Message extends AkkaSerializable {
+    }
 
-		return this;
-	}
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ResultMessage implements Message {
+        private static final long serialVersionUID = -7070569202900845736L;
+        List<InclusionDependency> inclusionDependencies;
+    }
 
-	private Behavior<Message> handle(FinalizeMessage message) throws IOException {
-		this.getContext().getLog().info("Received FinalizeMessage!");
-
-		this.txt_writer.flush();
-
-		this.getContext().getSystem().unsafeUpcast().tell(new Guardian.ShutdownMessage());
-
-		return this;
-	}
-
-	private Behavior<Message> handle(PostStop signal) throws IOException {
-		this.txt_writer.close();
-
-		return this;
-	}
+    @NoArgsConstructor
+    public static class FinalizeMessage implements Message {
+        private static final long serialVersionUID = -6603856949941810321L;
+    }
 }

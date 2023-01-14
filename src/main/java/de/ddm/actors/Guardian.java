@@ -5,9 +5,9 @@ import akka.actor.typed.Behavior;
 import akka.actor.typed.javadsl.*;
 import akka.actor.typed.receptionist.Receptionist;
 import akka.actor.typed.receptionist.ServiceKey;
-import de.ddm.actors.message.Message;
 import de.ddm.actors.patterns.Reaper;
 import de.ddm.configuration.SystemConfiguration;
+import de.ddm.serialization.AkkaSerializable;
 import de.ddm.singletons.SystemConfigurationSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -17,135 +17,132 @@ import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
 
-public class Guardian extends AbstractBehavior<Message> {
+public class Guardian extends AbstractBehavior<Guardian.Message> {
 
-	////////////////////
-	// Actor Messages //
-	////////////////////
+    ////////////////////
+    // Actor Messages //
+    ////////////////////
 
-	
+    public static final String DEFAULT_NAME = "userGuardian";
+    public static final ServiceKey<Guardian.Message> guardianService = ServiceKey.create(Guardian.Message.class, DEFAULT_NAME + "Service");
+    private final TimerScheduler<Message> timers;
+    private final ActorRef<Reaper.Message> reaper;
 
-	@NoArgsConstructor
-	public static class StartMessage implements Message {
-		private static final long serialVersionUID = -6896669928271349802L;
-	}
+    ////////////////////////
+    // Actor Construction //
+    ////////////////////////
+    private Set<ActorRef<Message>> userGuardians = new HashSet<>();
+    private ActorRef<Master.Message> master;
+    private ActorRef<Worker.Message> worker;
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ShutdownMessage implements Message {
-		private static final long serialVersionUID = 7516129288777469221L;
-		private ActorRef<Message> initiator;
-	}
+    private Guardian(ActorContext<Message> context, TimerScheduler<Message> timers) {
+        super(context);
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ReceptionistListingMessage implements Message {
-		private static final long serialVersionUID = 2336368568740749020L;
-		private Receptionist.Listing listing;
-	}
+        this.timers = timers;
 
-	////////////////////////
-	// Actor Construction //
-	////////////////////////
+        this.reaper = context.spawn(Reaper.create(), Reaper.DEFAULT_NAME);
+        this.master = this.isMaster() ? context.spawn(Master.create(), Master.DEFAULT_NAME) : null;
+        this.worker = context.spawn(Worker.create(), Worker.DEFAULT_NAME);
 
-	public static final String DEFAULT_NAME = "userGuardian";
+        context.getSystem().receptionist().tell(Receptionist.register(guardianService, context.getSelf()));
 
-	public static final ServiceKey<Message> guardianService = ServiceKey.create(Message.class, DEFAULT_NAME + "Service");
+        final ActorRef<Receptionist.Listing> listingResponseAdapter = context.messageAdapter(Receptionist.Listing.class, ReceptionistListingMessage::new);
+        context.getSystem().receptionist().tell(Receptionist.subscribe(guardianService, listingResponseAdapter));
+    }
 
-	public static Behavior<Message> create() {
-		return Behaviors.setup(
-				context -> Behaviors.withTimers(timers -> new Guardian(context, timers)));
-	}
+    public static Behavior<Message> create() {
+        return Behaviors.setup(
+                context -> Behaviors.withTimers(timers -> new Guardian(context, timers)));
+    }
 
-	private Guardian(ActorContext<Message> context, TimerScheduler<Message> timers) {
-		super(context);
+    /////////////////
+    // Actor State //
+    /////////////////
 
-		this.timers = timers;
+    private boolean isMaster() {
+        return SystemConfigurationSingleton.get().getRole().equals(SystemConfiguration.MASTER_ROLE);
+    }
 
-		this.reaper = context.spawn(Reaper.create(), Reaper.DEFAULT_NAME);
-		this.master = this.isMaster() ? context.spawn(Master.create(), Master.DEFAULT_NAME) : null;
-		this.worker = context.spawn(Worker.create(), Worker.DEFAULT_NAME);
+    @Override
+    public Receive<Message> createReceive() {
+        return newReceiveBuilder()
+                .onMessage(StartMessage.class, this::handle)
+                .onMessage(ShutdownMessage.class, this::handle)
+                .onMessage(ReceptionistListingMessage.class, this::handle)
+                .build();
+    }
 
-		context.getSystem().receptionist().tell(Receptionist.register(guardianService, context.getSelf()));
+    private Behavior<Message> handle(StartMessage message) {
+        if (this.master != null)
+            this.master.tell(new Master.StartMessage());
+        return this;
+    }
 
-		final ActorRef<Receptionist.Listing> listingResponseAdapter = context.messageAdapter(Receptionist.Listing.class, ReceptionistListingMessage::new);
-		context.getSystem().receptionist().tell(Receptionist.subscribe(guardianService, listingResponseAdapter));
-	}
+    private Behavior<Message> handle(ShutdownMessage message) {
+        ActorRef<Message> self = this.getContext().getSelf();
 
-	private boolean isMaster() {
-		return SystemConfigurationSingleton.get().getRole().equals(SystemConfiguration.MASTER_ROLE);
-	}
+        if ((message.getInitiator() != null) || this.isClusterDown()) {
+            this.shutdown();
+        } else {
+            for (ActorRef<Message> userGuardian : this.userGuardians)
+                if (!userGuardian.equals(self))
+                    userGuardian.tell(new ShutdownMessage(self));
 
-	/////////////////
-	// Actor State //
-	/////////////////
+            if (!this.timers.isTimerActive("ShutdownReattempt"))
+                this.timers.startTimerAtFixedRate("ShutdownReattempt", message, Duration.ofSeconds(5), Duration.ofSeconds(5));
+        }
+        return this;
+    }
 
-	private final TimerScheduler<Message> timers;
+    private boolean isClusterDown() {
+        return this.userGuardians.isEmpty() || (this.userGuardians.contains(this.getContext().getSelf()) && this.userGuardians.size() == 1);
+    }
 
-	private Set<ActorRef<Message>> userGuardians = new HashSet<>();
+    ////////////////////
+    // Actor Behavior //
+    ////////////////////
 
-	private final ActorRef<Message> reaper;
-	private ActorRef<Message> master;
-	private ActorRef<Message> worker;
+    private void shutdown() {
+        if (this.worker != null) {
+            this.worker.tell(new Worker.ShutdownMessage());
+            this.worker = null;
+        }
+        if (this.master != null) {
+            this.master.tell(new Master.ShutdownMessage());
+            this.master = null;
+        }
+    }
 
-	////////////////////
-	// Actor Behavior //
-	////////////////////
+    private Behavior<Message> handle(ReceptionistListingMessage message) {
+        this.userGuardians = message.getListing().getServiceInstances(Guardian.guardianService);
 
-	@Override
-	public Receive<Message> createReceive() {
-		return newReceiveBuilder()
-				.onMessage(StartMessage.class, this::handle)
-				.onMessage(ShutdownMessage.class, this::handle)
-				.onMessage(ReceptionistListingMessage.class, this::handle)
-				.build();
-	}
+        if (this.timers.isTimerActive("ShutdownReattempt") && this.isClusterDown())
+            this.shutdown();
 
-	private Behavior<Message> handle(StartMessage message) {
-		if (this.master != null)
-			this.master.tell(new Master.StartMessage());
-		return this;
-	}
+        return this;
+    }
 
-	private Behavior<Message> handle(ShutdownMessage message) {
-		ActorRef<Message> self = this.getContext().getSelf();
+    public interface Message extends AkkaSerializable {
+    }
 
-		if ((message.getInitiator() != null) || this.isClusterDown()) {
-			this.shutdown();
-		} else {
-			for (ActorRef<Message> userGuardian : this.userGuardians)
-				if (!userGuardian.equals(self))
-					userGuardian.tell(new ShutdownMessage(self));
+    @NoArgsConstructor
+    public static class StartMessage implements Message {
+        private static final long serialVersionUID = -6896669928271349802L;
+    }
 
-			if (!this.timers.isTimerActive("ShutdownReattempt"))
-				this.timers.startTimerAtFixedRate("ShutdownReattempt", message, Duration.ofSeconds(5), Duration.ofSeconds(5));
-		}
-		return this;
-	}
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ShutdownMessage implements Message {
+        private static final long serialVersionUID = 7516129288777469221L;
+        private ActorRef<Message> initiator;
+    }
 
-	private boolean isClusterDown() {
-		return this.userGuardians.isEmpty() || (this.userGuardians.contains(this.getContext().getSelf()) && this.userGuardians.size() == 1);
-	}
-
-	private void shutdown() {
-		if (this.worker != null) {
-			this.worker.tell(new Worker.ShutdownMessage());
-			this.worker = null;
-		}
-		if (this.master != null) {
-			this.master.tell(new Master.ShutdownMessage());
-			this.master = null;
-		}
-	}
-
-	private Behavior<Message> handle(ReceptionistListingMessage message) {
-		this.userGuardians = message.getListing().getServiceInstances(Guardian.guardianService);
-
-		if (this.timers.isTimerActive("ShutdownReattempt") && this.isClusterDown())
-			this.shutdown();
-
-		return this;
-	}
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReceptionistListingMessage implements Message {
+        private static final long serialVersionUID = 2336368568740749020L;
+        Receptionist.Listing listing;
+    }
 }

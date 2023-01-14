@@ -7,7 +7,7 @@ import akka.actor.typed.javadsl.AbstractBehavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
-import de.ddm.actors.message.Message;
+import de.ddm.serialization.AkkaSerializable;
 import de.ddm.singletons.ReaperSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -16,75 +16,77 @@ import lombok.NoArgsConstructor;
 import java.util.HashSet;
 import java.util.Set;
 
-public class Reaper extends AbstractBehavior<Message> {
+public class Reaper extends AbstractBehavior<Reaper.Message> {
 
-	public static <T> void watchWithDefaultReaper(ActorRef<T> actor) {
-		ReaperSingleton.get().tell(new WatchMeMessage(actor.unsafeUpcast()));
-	}
+    public static final String DEFAULT_NAME = "reaper";
 
-	////////////////////
-	// Actor Messages //
-	////////////////////
+    ////////////////////
+    // Actor Messages //
+    ////////////////////
+    private final Set<ActorRef<Void>> watchees = new HashSet<>();
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class WatchMeMessage implements Message {
-		private static final long serialVersionUID = 2674402496050807748L;
-		private ActorRef<Void> actor;
-	}
+    private Reaper(ActorContext<Message> context) {
+        super(context);
 
-	////////////////////////
-	// Actor Construction //
-	////////////////////////
+        ReaperSingleton.set(this.getContext().getSelf());
+    }
 
-	public static final String DEFAULT_NAME = "reaper";
+    ////////////////////////
+    // Actor Construction //
+    ////////////////////////
 
-	public static Behavior<Message> create() {
-		return Behaviors.setup(Reaper::new);
-	}
+    public static <T> void watchWithDefaultReaper(ActorRef<T> actor) {
+        ReaperSingleton.get().tell(new WatchMeMessage(actor.unsafeUpcast()));
+    }
 
-	private Reaper(ActorContext<Message> context) {
-		super(context);
+    public static Behavior<Message> create() {
+        return Behaviors.setup(Reaper::new);
+    }
 
-		ReaperSingleton.set(this.getContext().getSelf());
-	}
+    @Override
+    public Receive<Message> createReceive() {
+        return newReceiveBuilder()
+                .onMessage(WatchMeMessage.class, this::handle)
+                .onSignal(Terminated.class, this::handle)
+                .build();
+    }
 
-	/////////////////
-	// Actor State //
-	/////////////////
+    /////////////////
+    // Actor State //
+    /////////////////
 
-	private final Set<ActorRef<Void>> watchees = new HashSet<>();
+    private Behavior<Message> handle(WatchMeMessage message) {
+        this.getContext().getLog().info("Watching " + message.getActor().path().name());
 
-	////////////////////
-	// Actor Behavior //
-	////////////////////
+        if (this.watchees.add(message.getActor()))
+            this.getContext().watch(message.getActor());
+        return this;
+    }
 
-	@Override
-	public Receive<Message> createReceive() {
-		return newReceiveBuilder()
-				.onMessage(WatchMeMessage.class, this::handle)
-				.onSignal(Terminated.class, this::handle)
-				.build();
-	}
+    ////////////////////
+    // Actor Behavior //
+    ////////////////////
 
-	private Behavior<Message> handle(WatchMeMessage message) {
-		this.getContext().getLog().info("Watching " + message.getActor().path().name());
+    private Behavior<Message> handle(Terminated signal) {
+        this.watchees.remove(signal.getRef());
 
-		if (this.watchees.add(message.getActor()))
-			this.getContext().watch(message.getActor());
-		return this;
-	}
+        if (!this.watchees.isEmpty())
+            return this;
 
-	private Behavior<Message> handle(Terminated signal) {
-		this.watchees.remove(signal.getRef());
+        this.getContext().getLog().info("Every local actor has been reaped. Terminating the actor system...");
 
-		if (!this.watchees.isEmpty())
-			return this;
+        this.getContext().getSystem().terminate();
+        return Behaviors.stopped();
+    }
 
-		this.getContext().getLog().info("Every local actor has been reaped. Terminating the actor system...");
+    public interface Message extends AkkaSerializable {
+    }
 
-		this.getContext().getSystem().terminate();
-		return Behaviors.stopped();
-	}
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class WatchMeMessage implements Message {
+        private static final long serialVersionUID = 2674402496050807748L;
+        private ActorRef<Void> actor;
+    }
 }

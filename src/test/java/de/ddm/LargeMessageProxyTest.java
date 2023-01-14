@@ -15,61 +15,61 @@ import java.util.Objects;
 
 public class LargeMessageProxyTest {
 
-	@ClassRule
-	public static final TestKitJunitResource testKit = new TestKitJunitResource(SystemConfigurationSingleton.get().toAkkaTestConfig());
+    @ClassRule
+    public static final TestKitJunitResource testKit = new TestKitJunitResource(SystemConfigurationSingleton.get().toAkkaTestConfig());
 
-	@Data
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class MyLargeMessage implements LargeMessageProxy.LargeMessage {
-		private static final long serialVersionUID = -6299751781749878256L;
+    @Test
+    public void testLargeMessageSending() {
+        LargeMessageProxy.MAX_MESSAGE_SIZE = 2;
 
-		private String content = "Hello World! This is some large message with a large string.";
+        TestProbe<LargeMessageProxy.LargeMessage> probe = testKit.createTestProbe();
 
-		@Override
-		public boolean equals(Object o) {
-			if (this == o)
-				return true;
-			if (o == null || this.getClass() != o.getClass())
-				return false;
-			MyLargeMessage other = (MyLargeMessage) o;
-			return Objects.equals(this.content, other.content);
-		}
+        ActorRef<LargeMessageProxy.Message> senderLargeMessageProxy = testKit.spawn(LargeMessageProxy.create(probe.getRef()), "sender_" + LargeMessageProxy.DEFAULT_NAME);
+        ActorRef<LargeMessageProxy.Message> receiverLargeMessageProxy = testKit.spawn(LargeMessageProxy.create(probe.getRef()), "receiver_" + LargeMessageProxy.DEFAULT_NAME);
 
-		@Override
-		public int hashCode() {
-			return Objects.hash(content);
-		}
-	}
+        LargeMessageProxy.LargeMessage message = new MyLargeMessage();
 
-	@Test
-	public void testLargeMessageSending() {
-		LargeMessageProxy.MAX_MESSAGE_SIZE = 2;
+        senderLargeMessageProxy.tell(new LargeMessageProxy.SendMessage(message, receiverLargeMessageProxy));
 
-		TestProbe<LargeMessageProxy.LargeMessage> probe = testKit.createTestProbe();
+        probe.expectMessage(message);
+        probe.expectNoMessage();
+    }
 
-		ActorRef<LargeMessageProxy.Message> senderLargeMessageProxy = testKit.spawn(LargeMessageProxy.create(probe.getRef()), "sender_" + LargeMessageProxy.DEFAULT_NAME);
-		ActorRef<LargeMessageProxy.Message> receiverLargeMessageProxy = testKit.spawn(LargeMessageProxy.create(probe.getRef()), "receiver_" + LargeMessageProxy.DEFAULT_NAME);
+    @Test
+    public void testProtocol() {
+        TestProbe<LargeMessageProxy.LargeMessage> probe = testKit.createTestProbe();
 
-		LargeMessageProxy.LargeMessage message = new MyLargeMessage();
+        ActorRef<LargeMessageProxy.Message> largeMessageProxy = testKit.spawn(LargeMessageProxy.create(probe.getRef()), LargeMessageProxy.DEFAULT_NAME);
 
-		senderLargeMessageProxy.tell(new LargeMessageProxy.SendMessage(message, receiverLargeMessageProxy));
+        LargeMessageProxy.LargeMessage message = new MyLargeMessage();
 
-		probe.expectMessage(message);
-		probe.expectNoMessage();
-	}
+        largeMessageProxy.tell(new LargeMessageProxy.SendMessage(message, largeMessageProxy));
 
-	@Test
-	public void testProtocol() {
-		TestProbe<LargeMessageProxy.LargeMessage> probe = testKit.createTestProbe();
+        probe.expectMessage(message);
+        probe.expectNoMessage();
+    }
 
-		ActorRef<LargeMessageProxy.Message> largeMessageProxy = testKit.spawn(LargeMessageProxy.create(probe.getRef()), LargeMessageProxy.DEFAULT_NAME);
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MyLargeMessage implements LargeMessageProxy.LargeMessage {
+        private static final long serialVersionUID = -6299751781749878256L;
 
-		LargeMessageProxy.LargeMessage message = new MyLargeMessage();
+        private String content = "Hello World! This is some large message with a large string.";
 
-		largeMessageProxy.tell(new LargeMessageProxy.SendMessage(message, largeMessageProxy));
+        @Override
+        public boolean equals(Object o) {
+            if (this == o)
+                return true;
+            if (o == null || this.getClass() != o.getClass())
+                return false;
+            MyLargeMessage other = (MyLargeMessage) o;
+            return Objects.equals(this.content, other.content);
+        }
 
-		probe.expectMessage(message);
-		probe.expectNoMessage();
-	}
+        @Override
+        public int hashCode() {
+            return Objects.hash(content);
+        }
+    }
 }

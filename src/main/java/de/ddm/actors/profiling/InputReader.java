@@ -9,8 +9,7 @@ import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
 import com.opencsv.CSVReader;
 import com.opencsv.exceptions.CsvValidationException;
-import de.ddm.actors.message.largeMessage.LargeMessage;
-import de.ddm.actors.message.Message;
+import de.ddm.serialization.AkkaSerializable;
 import de.ddm.singletons.DomainConfigurationSingleton;
 import de.ddm.singletons.InputConfigurationSingleton;
 import lombok.AllArgsConstructor;
@@ -22,90 +21,92 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-public class InputReader extends AbstractBehavior<Message> {
+public class InputReader extends AbstractBehavior<InputReader.Message> {
 
-	////////////////////
-	// Actor Messages //
-	////////////////////
+    ////////////////////
+    // Actor Messages //
+    ////////////////////
 
+    public static final String DEFAULT_NAME = "inputReader";
+    private final int id;
+    private final int batchSize = DomainConfigurationSingleton.get().getInputReaderBatchSize();
 
+    ////////////////////////
+    // Actor Construction //
+    ////////////////////////
+    private final CSVReader reader;
+    private final String[] header;
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ReadHeaderMessage implements Message {
-		private static final long serialVersionUID = 1729062814525657711L;
-		private ActorRef<LargeMessage> replyTo;
-	}
+    private InputReader(ActorContext<Message> context, final int id, final File inputFile) throws IOException, CsvValidationException {
+        super(context);
+        this.id = id;
+        this.reader = InputConfigurationSingleton.get().createCSVReader(inputFile);
+        this.header = InputConfigurationSingleton.get().getHeader(inputFile);
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ReadBatchMessage implements Message {
-		private static final long serialVersionUID = -7915854043207237318L;
-		private ActorRef<LargeMessage> replyTo;
-	}
+        if (InputConfigurationSingleton.get().isFileHasHeader())
+            this.reader.readNext();
+    }
 
-	////////////////////////
-	// Actor Construction //
-	////////////////////////
+    /////////////////
+    // Actor State //
+    /////////////////
 
-	public static final String DEFAULT_NAME = "inputReader";
+    public static Behavior<Message> create(final int id, final File inputFile) {
+        return Behaviors.setup(context -> new InputReader(context, id, inputFile));
+    }
 
-	public static Behavior<Message> create(final int id, final File inputFile) {
-		return Behaviors.setup(context -> new InputReader(context, id, inputFile));
-	}
+    @Override
+    public Receive<Message> createReceive() {
+        return newReceiveBuilder()
+                .onMessage(ReadHeaderMessage.class, this::handle)
+                .onMessage(ReadBatchMessage.class, this::handle)
+                .onSignal(PostStop.class, this::handle)
+                .build();
+    }
 
-	private InputReader(ActorContext<Message> context, final int id, final File inputFile) throws IOException, CsvValidationException {
-		super(context);
-		this.id = id;
-		this.reader = InputConfigurationSingleton.get().createCSVReader(inputFile);
-		this.header = reader.readNext(); // read header
-		assert this.header != null : "Failed to read header of input file " + inputFile.getName();
-	}
+    private Behavior<Message> handle(ReadHeaderMessage message) {
+        message.getReplyTo().tell(new DependencyMiner.HeaderMessage(this.id, this.header));
+        return this;
+    }
 
-	/////////////////
-	// Actor State //
-	/////////////////
+    private Behavior<Message> handle(ReadBatchMessage message) throws IOException, CsvValidationException {
+        List<String[]> batch = new ArrayList<>(this.batchSize);
+        for (int i = 0; i < this.batchSize; i++) {
+            String[] line = this.reader.readNext();
+            if (line == null)
+                break;
+            batch.add(line);
+        }
 
-	private final int id;
-	private final int batchSize = DomainConfigurationSingleton.get().getInputReaderBatchSize();
-	private final CSVReader reader;
-	private final String[] header;
+        message.getReplyTo().tell(new DependencyMiner.BatchMessage(this.id, batch));
+        return this;
+    }
 
-	////////////////////
-	// Actor Behavior //
-	////////////////////
+    ////////////////////
+    // Actor Behavior //
+    ////////////////////
 
-	@Override
-	public Receive<Message> createReceive() {
-		return newReceiveBuilder()
-				.onMessage(ReadHeaderMessage.class, this::handle)
-				.onMessage(ReadBatchMessage.class, this::handle)
-				.onSignal(PostStop.class, this::handle)
-				.build();
-	}
+    private Behavior<Message> handle(PostStop signal) throws IOException {
+        this.reader.close();
+        return this;
+    }
 
-	private Behavior<Message> handle(ReadHeaderMessage message) {
-		message.getReplyTo().tell(new DependencyMiner.HeaderLargeMessage(this.id, this.header));
-		return this;
-	}
+    public interface Message extends AkkaSerializable {
+    }
 
-	private Behavior<Message> handle(ReadBatchMessage message) throws IOException, CsvValidationException {
-		List<String[]> batch = new ArrayList<>(this.batchSize);
-		for (int i = 0; i < this.batchSize; i++) {
-			String[] line = this.reader.readNext();
-			if (line == null)
-				break;
-			batch.add(line);
-		}
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReadHeaderMessage implements Message {
+        private static final long serialVersionUID = 1729062814525657711L;
+        ActorRef<DependencyMiner.Message> replyTo;
+    }
 
-		message.getReplyTo().tell(new DependencyMiner.BatchLargeMessage(this.id, batch));
-		return this;
-	}
-
-	private Behavior<Message> handle(PostStop signal) throws IOException {
-		this.reader.close();
-		return this;
-	}
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReadBatchMessage implements Message {
+        private static final long serialVersionUID = -7915854043207237318L;
+        ActorRef<DependencyMiner.Message> replyTo;
+    }
 }

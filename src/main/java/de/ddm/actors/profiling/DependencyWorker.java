@@ -7,140 +7,148 @@ import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
 import akka.actor.typed.javadsl.Receive;
 import akka.actor.typed.receptionist.Receptionist;
-import de.ddm.actors.message.largeMessage.LargeMessage;
-import de.ddm.actors.message.Message;
-import de.ddm.actors.message.largeMessage.SendMessage;
 import de.ddm.actors.patterns.LargeMessageProxy;
 import de.ddm.serialization.AkkaSerializable;
-import de.ddm.structures.InclusionDependency;
-import de.ddm.structures.Task;
+import de.ddm.structures.Pair;
+import de.ddm.structures.WorkMessage;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
-public class DependencyWorker extends AbstractBehavior<DependencyWorker.DependencyWorkerMessage> {
+public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message> {
+    public static final String DEFAULT_NAME = "dependencyWorker";
+    ////////////////////
+    // Actor Messages //
+    ////////////////////
+    private final ActorRef<LargeMessageProxy.Message> largeMessageProxy;
 
-	////////////////////
-	// Actor Messages //
-	////////////////////
+    private DependencyWorker(ActorContext<Message> context) {
+        super(context);
 
-	public interface DependencyWorkerMessage extends AkkaSerializable, LargeMessage {
-	}
+        final ActorRef<Receptionist.Listing> listingResponseAdapter = context.messageAdapter(Receptionist.Listing.class, ReceptionistListingMessage::new);
+        context.getSystem().receptionist().tell(Receptionist.subscribe(DependencyMiner.dependencyMinerService, listingResponseAdapter));
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class ReceptionistListingDependencyWorkerMessage implements DependencyWorkerMessage {
-		private static final long serialVersionUID = -5246338806092216222L;
-		Receptionist.Listing listing;
-	}
+        this.largeMessageProxy = this.getContext().spawn(LargeMessageProxy.create(this.getContext().getSelf().unsafeUpcast()), LargeMessageProxy.DEFAULT_NAME);
+    }
 
-	@Getter
-	@NoArgsConstructor
-	@AllArgsConstructor
-	public static class TaskDependencyWorkerMessage implements DependencyWorkerMessage {
-		private static final long serialVersionUID = -4667745204456518160L;
-		ActorRef<Message> dependencyMinerLargeMessageProxy;
+    public static Behavior<Message> create() {
+        return Behaviors.setup(DependencyWorker::new);
+    }
 
-		private Task task;
-		private Map<String, Set<String>> distinctValuesA;
-		private Map<String, Set<String>> distinctValuesB;
+    static ArrayList<Pair> inclusionDependencies(WorkMessage dependent, WorkMessage referenced) {
+        ArrayList<Pair> ans = new ArrayList<>();
+        for (int colInd = 0; colInd < referenced.columns(); colInd++) {
+            Set<String> indVals = new HashSet<>();
+            for (int i = 0; i < referenced.rows(); i++) {
+                indVals.add(referenced.elem(i, colInd));
+            }
+            int len = indVals.size();
+            for (int colDep = 0; colDep < dependent.columns(); colDep++) {
+                boolean depends = true;
+                for (int i = 0; i < dependent.rows(); i++) {
+                    String cur = dependent.elem(i, colDep);
+                    indVals.add(cur);
+                    if (indVals.size() > len) {
+                        indVals.remove(cur);
+                        depends = false;
+                    }
+                }
+                if (depends) {
+                    ans.add(new Pair(dependent.getId(), referenced.getId(), dependent.col(colDep), referenced.col(colInd)));
+                }
+            }
+        }
+        return ans;
+    }
 
-		private int getSetMemorySize(Set<String> set) {
-			return set.stream().mapToInt(value -> value.length() * 2).sum();
-		}
+    ////////////////////////
+    // Actor Construction //
+    ////////////////////////
 
-		public int getMemorySize() {
-			return distinctValuesA.values().stream().mapToInt(this::getSetMemorySize).sum() + distinctValuesB.values().stream().mapToInt(this::getSetMemorySize).sum();
-		}
-	}
+    @Override
+    public Receive<Message> createReceive() {
+        return newReceiveBuilder()
+                .onMessage(ReceptionistListingMessage.class, this::handle)
+                .onMessage(TaskMessage.class, this::handle)
+                .onMessage(IdleMessage.class, this::handle)
+                .build();
+    }
 
-	////////////////////////
-	// Actor Construction //
-	////////////////////////
+    private Behavior<Message> handle(IdleMessage idleMessage) {
+        try {
+            TimeUnit.SECONDS.sleep(1);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(), new ArrayList<>());
+        this.largeMessageProxy.tell(new LargeMessageProxy.SendMessage(completionMessage, idleMessage.getDependencyMinerLargeMessageProxy()));
+        return this;
+    }
 
-	public static final String DEFAULT_NAME = "dependencyWorker";
+    private Behavior<Message> handle(ReceptionistListingMessage message) {
+        Set<ActorRef<DependencyMiner.Message>> dependencyMiners = message.getListing().getServiceInstances(DependencyMiner.dependencyMinerService);
+        for (ActorRef<DependencyMiner.Message> dependencyMiner : dependencyMiners)
+            dependencyMiner.tell(new DependencyMiner.RegistrationMessage(this.getContext().getSelf()));
+        return this;
+    }
 
-	public static Behavior<DependencyWorkerMessage> create() {
-		return Behaviors.setup(DependencyWorker::new);
-	}
+    /////////////////
+    // Actor State //
+    /////////////////
 
-	private DependencyWorker(ActorContext<DependencyWorkerMessage> context) {
-		super(context);
+    private Behavior<Message> handle(TaskMessage message) {
+        this.getContext().getLog().info("Working!");
+        List<Pair> deps = inclusionDependencies(message.getTask1(), message.getTask2());
+        LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(), deps);
+        this.largeMessageProxy.tell(new LargeMessageProxy.SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
+        return this;
+    }
 
-		final ActorRef<Receptionist.Listing> listingResponseAdapter = context.messageAdapter(Receptionist.Listing.class, ReceptionistListingDependencyWorkerMessage::new);
-		context.getSystem().receptionist().tell(Receptionist.subscribe(DependencyMiner.dependencyMinerService, listingResponseAdapter));
+    ////////////////////
+    // Actor Behavior //
+    ////////////////////
 
-		this.largeMessageProxy = this.getContext().spawn(LargeMessageProxy.create(this.getContext().getSelf().unsafeUpcast()), LargeMessageProxy.DEFAULT_NAME);
-	}
+    public interface DependencyWorkerMessage extends AkkaSerializable, LargeMessageProxy.LargeMessage {
+    }
 
-	/////////////////
-	// Actor State //
-	/////////////////
+    public interface Message extends AkkaSerializable {
+    }
 
-	private final ActorRef<Message> largeMessageProxy;
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReceptionistListingMessage implements Message {
+        private static final long serialVersionUID = -5246338806092216222L;
+        Receptionist.Listing listing;
+    }
 
-	////////////////////
-	// Actor Behavior //
-	////////////////////
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class IdleMessage implements Message {
+        private static final long serialVersionUID = -5246338806092216222L;
+        ActorRef<LargeMessageProxy.Message> dependencyMinerLargeMessageProxy;
+    }
 
-	@Override
-	public Receive<DependencyWorkerMessage> createReceive() {
-		return newReceiveBuilder()
-				.onMessage(ReceptionistListingDependencyWorkerMessage.class, this::handle)
-				.onMessage(TaskDependencyWorkerMessage.class, this::handle)
-				.build();
-	}
+    @Getter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TaskMessage implements Message {
+        private static final long serialVersionUID = -4667745204456518160L;
+        ActorRef<LargeMessageProxy.Message> dependencyMinerLargeMessageProxy;
+        private WorkMessage task1;
+        private WorkMessage task2;
 
-	private Behavior<DependencyWorkerMessage> handle(ReceptionistListingDependencyWorkerMessage message) {
-		Set<ActorRef<LargeMessage>> dependencyMiners = message.getListing().getServiceInstances(DependencyMiner.dependencyMinerService);
-		for (ActorRef<LargeMessage> dependencyMiner : dependencyMiners)
-			dependencyMiner.tell(new DependencyMiner.RegistrationLargeMessage(this.getContext().getSelf(), this.largeMessageProxy));
-		return this;
-	}
+        public TaskMessage(WorkMessage task1, WorkMessage task2, int id1, int id2) {
+            this.task1 = task1;
+            this.task2 = task2;
 
-
-	private Behavior<DependencyWorkerMessage> handle(TaskDependencyWorkerMessage message) {
-		this.getContext().getLog().info(
-			message.task.getTableNameA(), message.task.getColumnNamesA().size(), message.distinctValuesA.values().stream().mapToInt(set -> set.size()).sum(),
-			message.task.getTableNameB(), message.task.getColumnNamesB().size(), message.distinctValuesB.values().stream().mapToInt(set -> set.size()).sum(),
-			message.getMemorySize());
-
-		List<InclusionDependency> inclusionDeps = new ArrayList<>();
-		message.distinctValuesA.forEach((columnA, setA) -> {
-			message.distinctValuesB.forEach((columnB, setB) -> {
-			        if (columnA == columnB) {
-			            return;
-				}
-				for (InclusionDependency dep : inclusionDeps) {
-				    if (dep.getDependentColumn() == columnA
-				    && dep.getReferencedColumn() == columnB){
-				       return;
-				    }
-				}
-				
-				int cardinalityA = setA.size();
-				int cardinalityB = setB.size();
-
-
-				if (cardinalityA <= cardinalityB && setB.containsAll(setA)) {
-					inclusionDeps.add(new InclusionDependency(message.task.getTableNameA(), message.task.getTableNameB(), columnA, columnB));
-				}
-				if (cardinalityB <= cardinalityA && setA.containsAll(setB)) {
-					inclusionDeps.add(new InclusionDependency(message.task.getTableNameB(), message.task.getTableNameA(), columnB, columnA));
-				}
-			});
-		});
-
-		this.getContext().getLog().info(
-			"Found {} INDs for table {} and table {}: {}",
-			inclusionDeps.size(), message.task.getTableNameA(), message.task.getTableNameB(), inclusionDeps);
-
-		LargeMessage completionMessage = new DependencyMiner.CompletionLargeMessage(this.getContext().getSelf(), inclusionDeps);
-		this.largeMessageProxy.tell(new SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
-
-		return this;
-	}
+        }
+    }
 }
